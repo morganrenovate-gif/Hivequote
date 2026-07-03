@@ -1,0 +1,70 @@
+{
+  "name": "HiveQuote 00 — Global Error Handler",
+  "nodes": [
+    {
+      "parameters": {},
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO error_log (scenario_name, error_message, input_payload) VALUES ($1, $2, $3::jsonb);",
+        "options": {
+          "queryReplacement": "={{ $json.workflow.name }},{{ $json.execution.error.message }},{{ JSON.stringify($json.execution.error) }}"
+        }
+      },
+      "name": "Log to error_log",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [480, 300],
+      "credentials": { "postgres": { "name": "Supabase Postgres" } }
+    },
+    {
+      "parameters": {
+        "fromEmail": "alerts@hivequote.com",
+        "toEmail": "={{ $env.FOUNDER_EMAIL }}",
+        "subject": "=🚨 HiveQuote scenario failed: {{ $json.workflow.name }}",
+        "text": "=Workflow: {{ $json.workflow.name }}\nError: {{ $json.execution.error.message }}\nExecution: {{ $json.execution.url }}\n\nCheck /admin/monitoring."
+      },
+      "name": "Email Founder",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [720, 200],
+      "credentials": { "smtp": { "name": "SMTP" } }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.twilio.com/2010-04-01/Accounts/{{ $env.TWILIO_ACCOUNT_SID }}/Messages.json",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendBody": true,
+        "contentType": "form-urlencoded",
+        "bodyParameters": {
+          "parameters": [
+            { "name": "To", "value": "={{ $env.FOUNDER_PHONE }}" },
+            { "name": "From", "value": "={{ $env.PLATFORM_SMS_NUMBER }}" },
+            { "name": "Body", "value": "=HiveQuote FAILURE: {{ $json.workflow.name }} — {{ $json.execution.error.message }}" }
+          ]
+        }
+      },
+      "name": "SMS Founder (Twilio)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [720, 400]
+    }
+  ],
+  "connections": {
+    "Error Trigger": { "main": [[{ "node": "Log to error_log", "type": "main", "index": 0 }]] },
+    "Log to error_log": {
+      "main": [[
+        { "node": "Email Founder", "type": "main", "index": 0 },
+        { "node": "SMS Founder (Twilio)", "type": "main", "index": 0 }
+      ]]
+    }
+  },
+  "settings": {}
+}

@@ -1,0 +1,162 @@
+{
+  "name": "HiveQuote 03 — Contractor Job Status Handler",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "hivequote/job-status",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "name": "GHL Webhook: WON/LOST/PENDING",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [200, 400]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT la.id, la.lead_id, c.id AS contractor_id, c.billing_model, c.ppc_eligible, t.avg_job_value_cents, l.phone AS homeowner_phone, l.first_name AS homeowner_name FROM lead_assignments la JOIN contractors c ON c.id = la.contractor_id JOIN leads l ON l.id = la.lead_id JOIN trades t ON t.id = l.trade_id WHERE c.phone = $1 AND la.outcome IS NULL ORDER BY la.assigned_at DESC LIMIT 1;",
+        "options": { "queryReplacement": "={{ $json.body.contractor_phone }}" }
+      },
+      "name": "Find open assignment",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [420, 400],
+      "credentials": { "postgres": { "name": "Supabase Postgres" } }
+    },
+    {
+      "parameters": {
+        "dataType": "string",
+        "value1": "={{ $('GHL Webhook: WON/LOST/PENDING').item.json.body.reply.trim().toUpperCase() }}",
+        "rules": {
+          "rules": [
+            { "value2": "WON", "output": 0 },
+            { "value2": "LOST", "output": 1 },
+            { "value2": "PENDING", "output": 2 }
+          ]
+        }
+      },
+      "name": "Route by reply",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 1,
+      "position": [640, 400]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE lead_assignments SET outcome='won_unverified', outcome_reported_at=NOW(), verification_tier = CASE WHEN $2::int < 300000 THEN 1 WHEN $2::int <= 1000000 THEN 2 ELSE 3 END, updated_at=NOW() WHERE id=$1 RETURNING verification_tier;",
+        "options": {
+          "queryReplacement": "={{ $('Find open assignment').first().json.id }},{{ $('Find open assignment').first().json.avg_job_value_cents }}"
+        }
+      },
+      "name": "WON → won_unverified + tier",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [880, 200],
+      "credentials": { "postgres": { "name": "Supabase Postgres" } }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT (SELECT value FROM config WHERE key='sms_active') AS sms_active, EXISTS(SELECT 1 FROM sms_suppression WHERE phone=$1) AS suppressed;",
+        "options": { "queryReplacement": "={{ $('Find open assignment').first().json.homeowner_phone }}" }
+      },
+      "name": "SMS gate (homeowner)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1100, 200],
+      "credentials": { "postgres": { "name": "Supabase Postgres" } }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            { "value1": "={{ $json.sms_active === 'true' && !$json.suppressed }}", "value2": true }
+          ]
+        }
+      },
+      "name": "Send verification SMS?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1320, 200]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://services.leadconnectorhq.com/conversations/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={ \"type\": \"SMS\", \"contactId\": \"{{ $('GHL Webhook: WON/LOST/PENDING').item.json.body.homeowner_ghl_contact_id }}\", \"message\": \"Hi {{ $('Find open assignment').first().json.homeowner_name }}, quick confirmation from HiveQuote: did you hire your matched contractor for this project? Reply YES or NO. Thanks!\" }"
+      },
+      "name": "Homeowner confirm SMS",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1540, 120],
+      "credentials": { "httpHeaderAuth": { "name": "GHL API" } }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE lead_assignments SET homeowner_confirmation_sent_at=NOW() WHERE id=$1; INSERT INTO job_verifications (lead_assignment_id, verification_tier, verification_method) VALUES ($1, $2, 'homeowner_sms_confirm');",
+        "options": {
+          "queryReplacement": "={{ $('Find open assignment').first().json.id }},{{ $('WON → won_unverified + tier').first().json.verification_tier }}"
+        }
+      },
+      "name": "Log verification request",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1540, 300],
+      "credentials": { "postgres": { "name": "Supabase Postgres" } }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE lead_assignments SET outcome='lost', outcome_reported_at=NOW(), updated_at=NOW() WHERE id=$1;",
+        "options": { "queryReplacement": "={{ $('Find open assignment').first().json.id }}" }
+      },
+      "name": "LOST → log outcome",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [880, 440],
+      "credentials": { "postgres": { "name": "Supabase Postgres" } }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO lead_delivery_events (lead_assignment_id, event_type, event_data, triggered_by) VALUES ($1, 'status_pending_reping_7d', '{}'::jsonb, 'n8n');",
+        "options": { "queryReplacement": "={{ $('Find open assignment').first().json.id }}" }
+      },
+      "name": "PENDING → re-ping in 7 days",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [880, 620],
+      "credentials": { "postgres": { "name": "Supabase Postgres" } }
+    }
+  ],
+  "connections": {
+    "GHL Webhook: WON/LOST/PENDING": { "main": [[{ "node": "Find open assignment", "type": "main", "index": 0 }]] },
+    "Find open assignment": { "main": [[{ "node": "Route by reply", "type": "main", "index": 0 }]] },
+    "Route by reply": {
+      "main": [
+        [{ "node": "WON → won_unverified + tier", "type": "main", "index": 0 }],
+        [{ "node": "LOST → log outcome", "type": "main", "index": 0 }],
+        [{ "node": "PENDING → re-ping in 7 days", "type": "main", "index": 0 }]
+      ]
+    },
+    "WON → won_unverified + tier": { "main": [[{ "node": "SMS gate (homeowner)", "type": "main", "index": 0 }]] },
+    "SMS gate (homeowner)": { "main": [[{ "node": "Send verification SMS?", "type": "main", "index": 0 }]] },
+    "Send verification SMS?": {
+      "main": [
+        [
+          { "node": "Homeowner confirm SMS", "type": "main", "index": 0 },
+          { "node": "Log verification request", "type": "main", "index": 0 }
+        ],
+        [{ "node": "Log verification request", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": { "errorWorkflow": "HiveQuote 00 — Global Error Handler" }
+}
