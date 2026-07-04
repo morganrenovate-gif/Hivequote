@@ -26,6 +26,21 @@ export const metadata: Metadata = {
     title: 'HiveQuote — Utah Home Services, One Vetted Pro Per Project',
     description:
       'One project request. One licensed Utah pro. Zero spam calls. Free for homeowners.',
+    images: [
+      {
+        url: '/og.png',
+        width: 1200,
+        height: 630,
+        alt: 'HiveQuote — One project. One vetted pro. Zero spam calls.',
+      },
+    ],
+  },
+  twitter: {
+    card: 'summary_large_image',
+    title: 'HiveQuote — Utah Home Services, One Vetted Pro Per Project',
+    description:
+      'One project request. One licensed Utah pro. Zero spam calls. Free for homeowners.',
+    images: ['/og.png'],
   },
 }
 
