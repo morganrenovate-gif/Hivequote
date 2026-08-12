@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
+import { isAuthorizedWebhook } from '@/lib/utils/webhook-auth'
 
 /**
  * Generic GHL webhook receiver. GHL fires this on pipeline stage
@@ -8,6 +9,10 @@ import { createServiceClient } from '@/lib/supabase/server'
  * polling (Section 2.2C).
  */
 export async function POST(req: NextRequest) {
+  if (!isAuthorizedWebhook(req)) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+
   const payload = await req.json().catch(() => null)
   if (!payload) {
     return NextResponse.json({ error: 'Invalid payload' }, { status: 400 })

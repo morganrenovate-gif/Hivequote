@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServiceClient } from '@/lib/supabase/server'
+import { isAuthorizedWebhook } from '@/lib/utils/webhook-auth'
 
 /**
  * GHL webhook: fired when a lead is tagged "qualified" (replied YES to
@@ -13,6 +14,10 @@ const QualifySchema = z.object({
 })
 
 export async function POST(req: NextRequest) {
+  if (!isAuthorizedWebhook(req)) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+
   const parsed = QualifySchema.safeParse(await req.json().catch(() => null))
   if (!parsed.success) {
     return NextResponse.json({ error: 'Invalid payload' }, { status: 400 })
