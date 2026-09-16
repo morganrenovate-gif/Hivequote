@@ -9,9 +9,9 @@ import {
 
 function formToRecord(form: FormData): Record<string, string> {
   const params: Record<string, string> = {}
-  for (const [key, value] of form.entries()) {
+  form.forEach((value, key) => {
     if (typeof value === 'string') params[key] = value
-  }
+  })
   return params
 }
 
@@ -39,11 +39,18 @@ export async function POST(req: NextRequest) {
     ? `${messageSid}:${messageStatus || body || 'callback'}`
     : `body:${sha256Hex(rawForHash)}`
 
-  const claim = await claimWebhookEvent(supabase, {
-    provider: 'twilio',
-    eventId,
-    rawBody: rawForHash,
-  })
+  let claim: 'claimed' | 'duplicate'
+  try {
+    claim = await claimWebhookEvent(supabase, {
+      provider: 'twilio',
+      eventId,
+      rawBody: rawForHash,
+    })
+  } catch (error) {
+    console.error('Twilio webhook claim failed', { eventId, error })
+    return NextResponse.json({ error: 'Webhook claim failed' }, { status: 409 })
+  }
+
   if (claim === 'duplicate') {
     return NextResponse.json({ received: true, duplicate: true })
   }
@@ -73,7 +80,11 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ received: true })
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown Twilio webhook error'
-    await completeWebhookEvent(supabase, 'twilio', eventId, 'failed', message)
+    try {
+      await completeWebhookEvent(supabase, 'twilio', eventId, 'failed', message)
+    } catch (completionError) {
+      console.error('Could not mark Twilio webhook failed', { eventId, completionError })
+    }
     return NextResponse.json({ error: 'Webhook processing failed' }, { status: 500 })
   }
 }
