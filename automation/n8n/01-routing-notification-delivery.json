@@ -1,0 +1,226 @@
+{
+  "name": "HiveQuote 01 — Authorized Offer Notification Delivery",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [{ "field": "minutes", "minutesInterval": 1 }]
+        }
+      },
+      "name": "Every minute",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [180, 360]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.HIVEQUOTE_APP_BASE_URL + '/api/routing/notifications/claim' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-hivequote-internal-key",
+              "value": "={{ $env.HIVEQUOTE_INTERNAL_WEBHOOK_SECRET }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={ \"lease_seconds\": 120, \"worker\": \"n8n-routing-notification\" }",
+        "options": {}
+      },
+      "name": "Claim next authorized notification",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [420, 360]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.job && $json.job.outbox_id ? 'yes' : 'no' }}",
+              "operation": "equals",
+              "value2": "yes"
+            }
+          ]
+        }
+      },
+      "name": "Job available?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [660, 360]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.job.contractor_ghl_contact_id || '' }}",
+              "operation": "isNotEmpty"
+            }
+          ]
+        }
+      },
+      "name": "GHL SMS target available?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://services.leadconnectorhq.com/conversations/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={ \"type\": \"SMS\", \"contactId\": \"{{ $('Claim next authorized notification').first().json.job.contractor_ghl_contact_id }}\", \"message\": \"New HiveQuote lead offer: {{ $('Claim next authorized notification').first().json.job.trade_name }} for {{ $('Claim next authorized notification').first().json.job.homeowner_first_name }} in ZIP {{ $('Claim next authorized notification').first().json.job.zip_code }}. Phone: {{ $('Claim next authorized notification').first().json.job.homeowner_phone }}. Timeline: {{ $('Claim next authorized notification').first().json.job.timeline }}. This offer is yours only while active. Log in at https://hivequote.com/contractor/dashboard to accept.\" }",
+        "options": {}
+      },
+      "name": "Send authorized GHL SMS",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1160, 220],
+      "credentials": {
+        "httpHeaderAuth": { "name": "GHL API" }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $('Claim next authorized notification').first().json.job.contractor_email || '' }}",
+              "operation": "isNotEmpty"
+            }
+          ]
+        }
+      },
+      "name": "Email fallback available?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1160, 440]
+    },
+    {
+      "parameters": {
+        "fromEmail": "leads@hivequote.com",
+        "toEmail": "={{ $('Claim next authorized notification').first().json.job.contractor_email }}",
+        "subject": "=New HiveQuote lead offer — {{ $('Claim next authorized notification').first().json.job.trade_name }}",
+        "text": "=New HiveQuote lead offer\n\nName: {{ $('Claim next authorized notification').first().json.job.homeowner_first_name }} {{ $('Claim next authorized notification').first().json.job.homeowner_last_name }}\nPhone: {{ $('Claim next authorized notification').first().json.job.homeowner_phone }}\nZIP: {{ $('Claim next authorized notification').first().json.job.zip_code }}\nTimeline: {{ $('Claim next authorized notification').first().json.job.timeline }}\nBudget: {{ $('Claim next authorized notification').first().json.job.budget_range || 'Not provided' }}\nProject: {{ $('Claim next authorized notification').first().json.job.project_description || 'Not provided' }}\n\nThis offer is yours only while active. Log in at https://hivequote.com/contractor/dashboard to accept before the offer expires."
+      },
+      "name": "Send authorized email fallback",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [1420, 380],
+      "credentials": {
+        "smtp": { "name": "SMTP" }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.HIVEQUOTE_APP_BASE_URL + '/api/routing/notifications/complete' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-hivequote-internal-key",
+              "value": "={{ $env.HIVEQUOTE_INTERNAL_WEBHOOK_SECRET }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={ \"outbox_id\": \"{{ $('Claim next authorized notification').first().json.job.outbox_id }}\", \"success\": true, \"provider\": \"ghl\", \"provider_message_id\": \"{{ $json.messageId || $json.id || '' }}\", \"worker\": \"n8n-routing-notification\" }",
+        "options": {}
+      },
+      "name": "Acknowledge GHL delivery",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1420, 220]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.HIVEQUOTE_APP_BASE_URL + '/api/routing/notifications/complete' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-hivequote-internal-key",
+              "value": "={{ $env.HIVEQUOTE_INTERNAL_WEBHOOK_SECRET }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={ \"outbox_id\": \"{{ $('Claim next authorized notification').first().json.job.outbox_id }}\", \"success\": true, \"provider\": \"smtp\", \"worker\": \"n8n-routing-notification\" }",
+        "options": {}
+      },
+      "name": "Acknowledge email delivery",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1660, 380]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.HIVEQUOTE_APP_BASE_URL + '/api/routing/notifications/complete' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-hivequote-internal-key",
+              "value": "={{ $env.HIVEQUOTE_INTERNAL_WEBHOOK_SECRET }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={ \"outbox_id\": \"{{ $('Claim next authorized notification').first().json.job.outbox_id }}\", \"success\": false, \"provider\": \"none\", \"error\": \"No GHL contact ID or contractor email is available for this authorized offer\", \"worker\": \"n8n-routing-notification\" }",
+        "options": {}
+      },
+      "name": "Record undeliverable offer",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1420, 540]
+    }
+  ],
+  "connections": {
+    "Every minute": {
+      "main": [[{ "node": "Claim next authorized notification", "type": "main", "index": 0 }]]
+    },
+    "Claim next authorized notification": {
+      "main": [[{ "node": "Job available?", "type": "main", "index": 0 }]]
+    },
+    "Job available?": {
+      "main": [
+        [{ "node": "GHL SMS target available?", "type": "main", "index": 0 }],
+        []
+      ]
+    },
+    "GHL SMS target available?": {
+      "main": [
+        [{ "node": "Send authorized GHL SMS", "type": "main", "index": 0 }],
+        [{ "node": "Email fallback available?", "type": "main", "index": 0 }]
+      ]
+    },
+    "Send authorized GHL SMS": {
+      "main": [[{ "node": "Acknowledge GHL delivery", "type": "main", "index": 0 }]]
+    },
+    "Email fallback available?": {
+      "main": [
+        [{ "node": "Send authorized email fallback", "type": "main", "index": 0 }],
+        [{ "node": "Record undeliverable offer", "type": "main", "index": 0 }]
+      ]
+    },
+    "Send authorized email fallback": {
+      "main": [[{ "node": "Acknowledge email delivery", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "errorWorkflow": "HiveQuote 00 — Global Error Handler"
+  }
+}
