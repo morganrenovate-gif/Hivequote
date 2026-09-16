@@ -58,16 +58,21 @@ export async function claimWebhookEvent(
   supabase: SupabaseClient,
   input: { provider: string; eventId: string; rawBody: string }
 ): Promise<'claimed' | 'duplicate'> {
-  const { error } = await supabase.from('webhook_events').insert({
-    provider: input.provider,
-    event_id: input.eventId,
-    payload_sha256: sha256Hex(input.rawBody),
-    status: 'processing',
+  const payloadHash = sha256Hex(input.rawBody)
+  const { data, error } = await supabase.rpc('claim_webhook_event', {
+    p_provider: input.provider,
+    p_event_id: input.eventId,
+    p_payload_sha256: payloadHash,
+    p_stale_after_seconds: 300,
   })
 
-  if (!error) return 'claimed'
-  if (error.code === '23505') return 'duplicate'
-  throw new Error(`Could not claim webhook event: ${error.message}`)
+  if (error) throw new Error(`Could not claim webhook event: ${error.message}`)
+  if (data === 'claimed') return 'claimed'
+  if (data === 'duplicate') return 'duplicate'
+  if (data === 'payload_mismatch') {
+    throw new Error(`Webhook event id reused with a different payload: ${input.provider}/${input.eventId}`)
+  }
+  throw new Error(`Unknown webhook claim result: ${String(data)}`)
 }
 
 export async function completeWebhookEvent(
@@ -77,9 +82,11 @@ export async function completeWebhookEvent(
   status: 'processed' | 'ignored' | 'failed',
   errorText?: string
 ): Promise<void> {
-  await supabase
+  const { error } = await supabase
     .from('webhook_events')
     .update({ status, processed_at: new Date().toISOString(), error_text: errorText ?? null })
     .eq('provider', provider)
     .eq('event_id', eventId)
+
+  if (error) throw new Error(`Could not complete webhook event: ${error.message}`)
 }
