@@ -1,18 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import { getStripe, STRIPE_PRODUCT_NAMES } from '@/lib/stripe/client'
+import { requireContractor } from '@/lib/auth/contractor'
+import { env } from '@/lib/env'
 
-/**
- * Creates a Stripe Checkout session for an ACH wallet top-up.
- * ACH preferred over cards for amounts over $500 (chargeback protection).
- */
 const TopupSchema = z.object({
-  contractor_id: z.string(),
   amount_cents: z.number().int().min(5000).max(1000000),
-  stripe_customer_id: z.string().optional(),
 })
 
 export async function POST(req: NextRequest) {
+  const contractor = await requireContractor(req)
+  if (!contractor) {
+    return NextResponse.json({ error: 'Authentication required' }, { status: 401 })
+  }
+
   const parsed = TopupSchema.safeParse(await req.json().catch(() => null))
   if (!parsed.success) {
     return NextResponse.json({ error: 'Invalid top-up request' }, { status: 400 })
@@ -20,17 +21,15 @@ export async function POST(req: NextRequest) {
 
   const stripe = getStripe()
   if (!stripe) {
-    console.info('[mock] Wallet top-up requested:', parsed.data)
-    return NextResponse.json({
-      success: true,
-      mock: true,
-      checkout_url: '/contractor/dashboard/billing?mock_topup=success',
-    })
+    return NextResponse.json({ error: 'Billing is unavailable' }, { status: 503 })
+  }
+  if (!contractor.stripeCustomerId) {
+    return NextResponse.json({ error: 'Billing profile is incomplete' }, { status: 409 })
   }
 
   const session = await stripe.checkout.sessions.create({
     mode: 'payment',
-    customer: parsed.data.stripe_customer_id,
+    customer: contractor.stripeCustomerId,
     payment_method_types:
       parsed.data.amount_cents >= 50000 ? ['us_bank_account'] : ['us_bank_account', 'card'],
     line_items: [
@@ -47,11 +46,12 @@ export async function POST(req: NextRequest) {
       },
     ],
     metadata: {
-      contractor_id: parsed.data.contractor_id,
+      contractor_id: contractor.contractorId,
+      auth_user_id: contractor.userId,
       payment_type: 'wallet_topup',
     },
-    success_url: `${process.env.NEXT_PUBLIC_SITE_URL}/contractor/dashboard/billing?topup=success`,
-    cancel_url: `${process.env.NEXT_PUBLIC_SITE_URL}/contractor/dashboard/billing?topup=cancelled`,
+    success_url: `${env.siteUrl}/contractor/dashboard/billing?topup=success`,
+    cancel_url: `${env.siteUrl}/contractor/dashboard/billing?topup=cancelled`,
   })
 
   return NextResponse.json({ success: true, checkout_url: session.url })
