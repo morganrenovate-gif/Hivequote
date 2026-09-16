@@ -19,18 +19,38 @@ export default function ContractorLoginPage() {
 
     const supabase = createBrowserClient()
     if (!supabase) {
-      // Mock mode: any credentials open the demo dashboard
-      router.push('/contractor/dashboard')
-      return
-    }
-
-    const { error } = await supabase.auth.signInWithPassword({ email, password })
-    if (error) {
-      setError(error.message)
+      setError('Contractor login is not configured.')
       setLoading(false)
       return
     }
-    router.push('/contractor/dashboard')
+
+    const { data, error: signInError } = await supabase.auth.signInWithPassword({ email, password })
+    if (signInError || !data.session) {
+      setError(signInError?.message ?? 'Unable to establish a session.')
+      setLoading(false)
+      return
+    }
+
+    const sessionResponse = await fetch('/api/auth/contractor-session', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        access_token: data.session.access_token,
+        refresh_token: data.session.refresh_token,
+        expires_in: data.session.expires_in,
+      }),
+    })
+
+    if (!sessionResponse.ok) {
+      const result = await sessionResponse.json().catch(() => null)
+      await supabase.auth.signOut()
+      setError(result?.error ?? 'This login is not linked to an active contractor account.')
+      setLoading(false)
+      return
+    }
+
+    router.replace('/contractor/dashboard')
+    router.refresh()
   }
 
   return (
