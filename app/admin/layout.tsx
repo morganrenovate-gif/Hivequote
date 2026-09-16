@@ -1,6 +1,6 @@
 import Link from 'next/link'
 import { redirect } from 'next/navigation'
-import { getServerAdmin } from '@/lib/auth/admin-server'
+import { getServerAdmin, hasAdminRefreshSession } from '@/lib/auth/admin-server'
 
 const tabs = [
   { href: '/admin', label: 'Overview' },
@@ -16,7 +16,10 @@ export const metadata = { title: 'Admin', robots: { index: false } }
 
 export default async function AdminLayout({ children }: { children: React.ReactNode }) {
   const admin = await getServerAdmin()
-  if (!admin) redirect('/admin-access')
+  if (!admin) {
+    if (hasAdminRefreshSession()) redirect('/api/auth/admin-refresh?next=/admin')
+    redirect('/admin-access')
+  }
 
   return (
     <div className="bg-hive-50">
@@ -24,11 +27,8 @@ export default async function AdminLayout({ children }: { children: React.ReactN
         <div className="container-site flex flex-wrap items-center gap-1 py-2">
           <span className="mr-4 text-sm font-bold text-honey-400">HiveQuote Admin</span>
           {tabs.map((t) => (
-            <Link
-              key={t.href}
-              href={t.href}
-              className="rounded-lg px-3 py-2 text-sm font-medium text-hive-300 transition hover:bg-hive-800 hover:text-white"
-            >
+            <Link key={t.href} href={t.href}
+              className="rounded-lg px-3 py-2 text-sm font-medium text-hive-300 transition hover:bg-hive-800 hover:text-white">
               {t.label}
             </Link>
           ))}
