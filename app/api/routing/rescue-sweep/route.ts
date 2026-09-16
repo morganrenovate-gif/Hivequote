@@ -48,23 +48,28 @@ export async function POST(req: NextRequest) {
 
   const rerouted: unknown[] = []
   for (const release of releases) {
-    const leadId = typeof release?.lead_id === 'string' ? release.lead_id : null
-    if (!leadId) continue
+    const leadId = typeof release?.released_lead_id === 'string' ? release.released_lead_id : null
+    const releasedOfferId = typeof release?.released_offer_id === 'string' ? release.released_offer_id : null
+    if (!leadId || !releasedOfferId) continue
 
     const { data, error } = await supabase.rpc('reserve_next_lead_offer', {
       p_lead_id: leadId,
       p_offer_ttl_minutes: parsed.data.offer_ttl_minutes,
       p_actor: 'rescue_sweep',
-      p_idempotency_key: `rescue:${leadId}:${release.release_reason ?? 'released'}`,
+      p_idempotency_key: `rescue:${releasedOfferId}`,
     })
 
     if (error) {
-      rerouted.push({ lead_id: leadId, status: 'failed', code: error.code })
+      rerouted.push({ lead_id: leadId, released_offer_id: releasedOfferId, status: 'failed', code: error.code })
       continue
     }
 
     const result = Array.isArray(data) ? data[0] : data
-    rerouted.push({ lead_id: leadId, ...(result ?? { route_status: 'no_state' }) })
+    rerouted.push({
+      lead_id: leadId,
+      released_offer_id: releasedOfferId,
+      ...(result ?? { route_status: 'no_state' }),
+    })
   }
 
   return NextResponse.json({ success: true, released: releases, rerouted })
