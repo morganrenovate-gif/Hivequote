@@ -102,9 +102,10 @@ begin
     raise exception 'lead already has an active assignment';
   end if;
 
-  select coalesce(max(lo.attempt_no), 0) + 1 into v_attempt
-  from public.lead_offers lo
-  where lo.lead_id = p_lead_id;
+  -- Routing attempts must advance even when a prior run produced no offer.
+  select coalesce(max(rr.attempt_no), 0) + 1 into v_attempt
+  from public.routing_runs rr
+  where rr.lead_id = p_lead_id;
 
   insert into public.routing_runs (lead_id, state, attempt_no, idempotency_key)
   values (p_lead_id, 'routing', v_attempt, p_idempotency_key)
