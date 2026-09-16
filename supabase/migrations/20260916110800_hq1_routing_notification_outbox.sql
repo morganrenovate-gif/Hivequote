@@ -119,11 +119,12 @@ begin
   update public.routing_notification_outbox o
     set status = 'pending',
         lease_until = null,
-        last_error = coalesce(last_error, 'delivery lease expired'),
+        last_error = coalesce(o.last_error, 'delivery lease expired'),
         updated_at = now()
   where o.status = 'claimed'
     and o.lease_until is not null
     and o.lease_until <= now()
+    and o.attempt_count < 5
     and exists (
       select 1 from public.lead_offers lo
       where lo.id = o.offer_id
@@ -136,6 +137,7 @@ begin
   join public.lead_offers lo on lo.id = o.offer_id
   where o.status in ('pending','failed')
     and o.available_at <= now()
+    and o.attempt_count < 5
     and lo.status = 'offered'
     and lo.expires_at > now()
   order by o.available_at asc, o.created_at asc
@@ -146,14 +148,14 @@ begin
     return;
   end if;
 
-  update public.routing_notification_outbox
+  update public.routing_notification_outbox o
     set status = 'claimed',
         claimed_at = now(),
         lease_until = now() + make_interval(secs => p_lease_seconds),
-        attempt_count = attempt_count + 1,
+        attempt_count = o.attempt_count + 1,
         last_error = null,
         updated_at = now()
-  where id = v_job.id;
+  where o.id = v_job.id;
 
   insert into public.routing_events (
     lead_id, offer_id, contractor_id, event_type, event_data, triggered_by,
@@ -280,15 +282,15 @@ begin
     return 'sent';
   end if;
 
-  update public.routing_notification_outbox
+  update public.routing_notification_outbox o
     set status = 'failed',
-        available_at = now() + make_interval(secs => least(900, greatest(30, 30 * attempt_count)),
+        available_at = now() + make_interval(secs => least(900, greatest(30, 30 * o.attempt_count))),
         lease_until = null,
         provider = left(p_provider, 50),
         provider_message_id = left(p_provider_message_id, 255),
         last_error = left(coalesce(p_error, 'delivery failed'), 1000),
         updated_at = now()
-  where id = v_job.id;
+  where o.id = v_job.id;
 
   insert into public.routing_events (
     lead_id, offer_id, contractor_id, event_type, event_data, triggered_by,
