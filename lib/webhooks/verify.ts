@@ -1,5 +1,5 @@
 import crypto from 'crypto'
-import { validateRequest as validateTwilioRequest } from 'twilio'
+import type { SupabaseClient } from '@supabase/supabase-js'
 import { env } from '@/lib/env'
 
 const GHL_ED25519_PUBLIC_KEY = `-----BEGIN PUBLIC KEY-----
@@ -32,27 +32,31 @@ export function getCanonicalWebhookUrl(reqUrl: string): string {
   return base.toString()
 }
 
+/** Twilio signs URL + alphabetically sorted form fields with HMAC-SHA1. */
 export function verifyTwilioWebhook(
   reqUrl: string,
   signature: string | null,
   params: Record<string, string>
 ): boolean {
   if (!env.twilioAuthToken || !signature) return false
-  return validateTwilioRequest(
-    env.twilioAuthToken,
-    signature,
-    getCanonicalWebhookUrl(reqUrl),
-    params
-  )
+
+  const signed = Object.keys(params)
+    .sort()
+    .reduce((value, key) => value + key + params[key], getCanonicalWebhookUrl(reqUrl))
+
+  const expected = crypto
+    .createHmac('sha1', env.twilioAuthToken)
+    .update(Buffer.from(signed, 'utf8'))
+    .digest('base64')
+
+  const a = Buffer.from(expected)
+  const b = Buffer.from(signature)
+  return a.length === b.length && crypto.timingSafeEqual(a, b)
 }
 
 export async function claimWebhookEvent(
-  supabase: NonNullable<ReturnType<typeof import('@/lib/supabase/server').createServiceClient>>,
-  input: {
-    provider: string
-    eventId: string
-    rawBody: string
-  }
+  supabase: SupabaseClient,
+  input: { provider: string; eventId: string; rawBody: string }
 ): Promise<'claimed' | 'duplicate'> {
   const { error } = await supabase.from('webhook_events').insert({
     provider: input.provider,
@@ -67,7 +71,7 @@ export async function claimWebhookEvent(
 }
 
 export async function completeWebhookEvent(
-  supabase: NonNullable<ReturnType<typeof import('@/lib/supabase/server').createServiceClient>>,
+  supabase: SupabaseClient,
   provider: string,
   eventId: string,
   status: 'processed' | 'ignored' | 'failed',
@@ -75,11 +79,7 @@ export async function completeWebhookEvent(
 ): Promise<void> {
   await supabase
     .from('webhook_events')
-    .update({
-      status,
-      processed_at: new Date().toISOString(),
-      error_text: errorText ?? null,
-    })
+    .update({ status, processed_at: new Date().toISOString(), error_text: errorText ?? null })
     .eq('provider', provider)
     .eq('event_id', eventId)
 }
