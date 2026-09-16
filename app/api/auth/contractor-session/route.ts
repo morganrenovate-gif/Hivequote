@@ -5,6 +5,7 @@ import {
   CONTRACTOR_REFRESH_COOKIE,
   resolveContractorAccessToken,
 } from '@/lib/auth/contractor'
+import { authorizedMutationOrigin } from '@/lib/security/request'
 
 const SessionSchema = z.object({
   access_token: z.string().min(20),
@@ -13,6 +14,10 @@ const SessionSchema = z.object({
 })
 
 export async function POST(req: NextRequest) {
+  if (!authorizedMutationOrigin(req)) {
+    return NextResponse.json({ error: 'Invalid request origin' }, { status: 403 })
+  }
+
   const parsed = SessionSchema.safeParse(await req.json().catch(() => null))
   if (!parsed.success) {
     return NextResponse.json({ error: 'Invalid session' }, { status: 400 })
@@ -42,7 +47,11 @@ export async function POST(req: NextRequest) {
   return res
 }
 
-export async function DELETE() {
+export async function DELETE(req: NextRequest) {
+  if (!authorizedMutationOrigin(req)) {
+    return NextResponse.json({ error: 'Invalid request origin' }, { status: 403 })
+  }
+
   const res = NextResponse.json({ success: true })
   res.cookies.set(CONTRACTOR_ACCESS_COOKIE, '', { httpOnly: true, path: '/', maxAge: 0 })
   res.cookies.set(CONTRACTOR_REFRESH_COOKIE, '', { httpOnly: true, path: '/', maxAge: 0 })
