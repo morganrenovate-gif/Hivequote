@@ -1,4 +1,6 @@
 import Link from 'next/link'
+import { redirect } from 'next/navigation'
+import { getServerContractor } from '@/lib/auth/server'
 
 const tabs = [
   { href: '/contractor/dashboard', label: 'Overview' },
@@ -9,7 +11,10 @@ const tabs = [
 
 export const metadata = { title: 'Contractor Dashboard', robots: { index: false } }
 
-export default function DashboardLayout({ children }: { children: React.ReactNode }) {
+export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
+  const contractor = await getServerContractor()
+  if (!contractor) redirect('/contractor/login')
+
   return (
     <div className="bg-hive-50">
       <div className="border-b border-hive-200 bg-white">
@@ -23,8 +28,8 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               {t.label}
             </Link>
           ))}
-          <span className="ml-auto rounded-full bg-honey-100 px-3 py-1 text-xs font-semibold text-honey-800">
-            Demo mode — connect Supabase for live data
+          <span className="ml-auto rounded-full bg-green-100 px-3 py-1 text-xs font-semibold text-green-800">
+            Authenticated contractor
           </span>
         </div>
       </div>
