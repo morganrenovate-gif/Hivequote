@@ -24,3 +24,30 @@ create policy contractor_update_own
   to authenticated
   using (auth_user_id = auth.uid())
   with check (auth_user_id = auth.uid());
+
+-- Existing V2 policies incorrectly compare contractor business UUIDs to auth.uid().
+drop policy if exists contractors_own_data on public.lead_assignments;
+create policy contractors_own_data
+  on public.lead_assignments
+  for select
+  to authenticated
+  using (
+    exists (
+      select 1 from public.contractors c
+      where c.id = lead_assignments.contractor_id
+        and c.auth_user_id = auth.uid()
+    )
+  );
+
+drop policy if exists contractors_own_payments on public.payments;
+create policy contractors_own_payments
+  on public.payments
+  for select
+  to authenticated
+  using (
+    exists (
+      select 1 from public.contractors c
+      where c.id = payments.contractor_id
+        and c.auth_user_id = auth.uid()
+    )
+  );
