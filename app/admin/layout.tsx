@@ -1,4 +1,6 @@
 import Link from 'next/link'
+import { redirect } from 'next/navigation'
+import { getServerAdmin } from '@/lib/auth/admin-server'
 
 const tabs = [
   { href: '/admin', label: 'Overview' },
@@ -12,7 +14,10 @@ const tabs = [
 
 export const metadata = { title: 'Admin', robots: { index: false } }
 
-export default function AdminLayout({ children }: { children: React.ReactNode }) {
+export default async function AdminLayout({ children }: { children: React.ReactNode }) {
+  const admin = await getServerAdmin()
+  if (!admin) redirect('/admin-access')
+
   return (
     <div className="bg-hive-50">
       <div className="border-b border-hive-800 bg-hive-950">
@@ -28,7 +33,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
             </Link>
           ))}
           <span className="ml-auto rounded-full bg-hive-800 px-3 py-1 text-xs font-semibold text-honey-400">
-            Demo mode
+            {admin.role}
           </span>
         </div>
       </div>
