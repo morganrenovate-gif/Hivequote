@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import { getStripe, STRIPE_PRODUCT_NAMES } from '@/lib/stripe/client'
 import { requireContractor } from '@/lib/auth/contractor'
+import { authorizedMutationOrigin } from '@/lib/security/request'
 import { env } from '@/lib/env'
 
 const TopupSchema = z.object({
@@ -9,6 +10,10 @@ const TopupSchema = z.object({
 })
 
 export async function POST(req: NextRequest) {
+  if (!authorizedMutationOrigin(req)) {
+    return NextResponse.json({ error: 'Invalid request origin' }, { status: 403 })
+  }
+
   const contractor = await requireContractor(req)
   if (!contractor) {
     return NextResponse.json({ error: 'Authentication required' }, { status: 401 })
