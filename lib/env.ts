@@ -11,6 +11,7 @@ export const env = {
   ghlApiKey: process.env.GHL_API_KEY ?? '',
   ghlLocationId: process.env.GHL_LOCATION_ID ?? '',
   twilioAuthToken: process.env.TWILIO_AUTH_TOKEN ?? '',
+  internalWebhookSecret: process.env.HIVEQUOTE_INTERNAL_WEBHOOK_SECRET ?? '',
   smsActive: process.env.SMS_ACTIVE === 'true',
   adminAccessKey: process.env.ADMIN_ACCESS_KEY ?? '',
   siteUrl: process.env.NEXT_PUBLIC_SITE_URL ?? 'https://hivequote.com',
