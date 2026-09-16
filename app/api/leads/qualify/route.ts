@@ -1,18 +1,29 @@
+import crypto from 'crypto'
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServiceClient } from '@/lib/supabase/server'
+import { env } from '@/lib/env'
 
-/**
- * GHL webhook: fired when a lead is tagged "qualified" (replied YES to
- * the 30-day intent SMS). Marks the lead qualified in Supabase; the
- * n8n/Make routing scenario picks it up from there via DB webhook.
- */
 const QualifySchema = z.object({
-  supabase_lead_id: z.string(),
-  qualification_reply: z.string().optional(),
+  supabase_lead_id: z.string().uuid(),
+  qualification_reply: z.string().max(500).optional(),
 })
 
+function authorizedInternalRequest(req: NextRequest): boolean {
+  const supplied = req.headers.get('x-hivequote-internal-key') ?? ''
+  const expected = env.internalWebhookSecret
+  if (!supplied || !expected) return false
+  const a = Buffer.from(supplied)
+  const b = Buffer.from(expected)
+  return a.length === b.length && crypto.timingSafeEqual(a, b)
+}
+
+/** Internal automation transition. Public callers cannot mark a lead qualified. */
 export async function POST(req: NextRequest) {
+  if (!authorizedInternalRequest(req)) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+
   const parsed = QualifySchema.safeParse(await req.json().catch(() => null))
   if (!parsed.success) {
     return NextResponse.json({ error: 'Invalid payload' }, { status: 400 })
@@ -20,11 +31,10 @@ export async function POST(req: NextRequest) {
 
   const supabase = createServiceClient()
   if (!supabase) {
-    console.info('[mock] Lead qualified:', parsed.data.supabase_lead_id)
-    return NextResponse.json({ success: true, mock: true })
+    return NextResponse.json({ error: 'Qualification service unavailable' }, { status: 503 })
   }
 
-  const { error } = await supabase
+  const { data, error } = await supabase
     .from('leads')
     .update({
       status: 'qualified',
@@ -33,9 +43,14 @@ export async function POST(req: NextRequest) {
       updated_at: new Date().toISOString(),
     })
     .eq('id', parsed.data.supabase_lead_id)
+    .in('status', ['new', 'qualifying', 'nurture'])
+    .select('id')
+    .maybeSingle()
 
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 })
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  if (!data) {
+    return NextResponse.json({ error: 'Lead not found or transition not allowed' }, { status: 409 })
   }
-  return NextResponse.json({ success: true })
+
+  return NextResponse.json({ success: true, lead_id: data.id })
 }
