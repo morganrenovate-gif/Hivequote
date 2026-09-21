@@ -1,8 +1,7 @@
 /**
- * External integration configuration.
+ * HiveQuote environment configuration.
  *
- * HQ-1 migration rule: missing integrations fail closed. There is no
- * operational mock mode. Hedy is the authoritative backend.
+ * Hedy is the authoritative backend. Missing integrations fail closed.
  */
 export const env = {
   hedyBackendOrigin: process.env.HEDY_BACKEND_ORIGIN ?? '',

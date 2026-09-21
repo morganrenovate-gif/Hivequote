@@ -24,7 +24,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             </Link>
           ))}
           <span className="ml-auto rounded-full bg-honey-100 px-3 py-1 text-xs font-semibold text-honey-800">
-            Demo mode — connect Supabase for live data
+            Hedy identity activation pending
           </span>
         </div>
       </div>
