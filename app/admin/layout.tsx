@@ -28,7 +28,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
             </Link>
           ))}
           <span className="ml-auto rounded-full bg-hive-800 px-3 py-1 text-xs font-semibold text-honey-400">
-            Demo mode
+            Hedy activation pending
           </span>
         </div>
       </div>

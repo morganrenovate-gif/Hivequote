@@ -1,11 +1,11 @@
 /**
- * Integration flags. Every external system is optional — the app runs
- * fully in mock mode until real keys are provided in .env.local.
+ * HiveQuote environment configuration.
+ *
+ * Hedy is the authoritative backend. Missing integrations fail closed.
  */
 export const env = {
-  supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL ?? '',
-  supabaseAnonKey: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? '',
-  supabaseServiceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY ?? '',
+  hedyBackendOrigin: process.env.HEDY_BACKEND_ORIGIN ?? '',
+  hedyEnvironment: process.env.HEDY_ENVIRONMENT ?? 'staging',
   stripeSecretKey: process.env.STRIPE_SECRET_KEY ?? '',
   stripeWebhookSecret: process.env.STRIPE_WEBHOOK_SECRET ?? '',
   ghlApiKey: process.env.GHL_API_KEY ?? '',
@@ -15,14 +15,7 @@ export const env = {
   siteUrl: process.env.NEXT_PUBLIC_SITE_URL ?? 'https://hivequote.com',
 }
 
-export const isSupabaseConfigured = Boolean(
-  env.supabaseUrl && env.supabaseServiceRoleKey
-)
+export const isHedyConfigured = Boolean(env.hedyBackendOrigin)
 export const isStripeConfigured = Boolean(env.stripeSecretKey)
 export const isGhlConfigured = Boolean(env.ghlApiKey && env.ghlLocationId)
-
-/**
- * A2P 10DLC gate — Section 2.8 of the blueprint. No SMS is ever sent
- * unless registration is approved AND SMS_ACTIVE=true.
- */
 export const canSendSms = () => env.smsActive

@@ -1,0 +1,205 @@
+{
+  "schemaVersion": 2,
+  "name": "HiveQuote — Hedy Native Foundation",
+  "projectSlug": "hivequote-core",
+  "sourceVersion": "V2",
+  "capabilities": {
+    "auth": false,
+    "push": false,
+    "realtime": false,
+    "askAi": {
+      "enabled": true,
+      "allowedModels": [],
+      "allowStreaming": true,
+      "allowImages": true
+    },
+    "localMachineAgentServices": []
+  },
+  "quotas": {
+    "maxFunctionCallsPerMinute": 1000,
+    "allowedMimeTypes": [],
+    "maxAuditWritesPerDay": 1000
+  },
+  "requiredSecrets": [],
+  "environment": [],
+  "dataCollections": [
+    {
+      "name": "assignments",
+      "indexes": [
+        {
+          "name": "bycontractor",
+          "field": "contractorId",
+          "sortField": "acceptedAt"
+        },
+        {
+          "name": "bylead",
+          "field": "leadId",
+          "sortField": "acceptedAt"
+        }
+      ]
+    },
+    {
+      "name": "contractors",
+      "indexes": [
+        {
+          "name": "bystatus",
+          "field": "status",
+          "sortField": "createdAt"
+        }
+      ]
+    },
+    {
+      "name": "coverage",
+      "indexes": [
+        {
+          "name": "bycoverage",
+          "field": "coverageKey",
+          "sortField": "createdAt"
+        }
+      ]
+    },
+    {
+      "name": "lead-offers",
+      "indexes": [
+        {
+          "name": "bycontractor",
+          "field": "contractorId",
+          "sortField": "offeredAt"
+        },
+        {
+          "name": "bylead",
+          "field": "leadId",
+          "sortField": "offeredAt"
+        },
+        {
+          "name": "bystatus",
+          "field": "status",
+          "sortField": "expiresAt"
+        }
+      ]
+    },
+    {
+      "name": "leads",
+      "indexes": [
+        {
+          "name": "bystatus",
+          "field": "status",
+          "sortField": "updatedAt"
+        }
+      ]
+    },
+    {
+      "name": "routing-events",
+      "indexes": [
+        {
+          "name": "bylead",
+          "field": "leadId",
+          "sortField": "createdAt"
+        }
+      ]
+    },
+    "system-config"
+  ],
+  "runtimeWritablePaths": [],
+  "routes": [
+    {
+      "method": "GET",
+      "path": "/api/health",
+      "kind": "Function",
+      "target": "health",
+      "requireAuth": false,
+      "order": 0,
+      "rateLimitPerMinute": 120
+    },
+    {
+      "method": "GET",
+      "path": "/api/synthetic/state",
+      "kind": "Function",
+      "target": "synthetic-state",
+      "requireAuth": false,
+      "order": 0,
+      "rateLimitPerMinute": 120
+    },
+    {
+      "method": "POST",
+      "path": "/api/synthetic/accept",
+      "kind": "Function",
+      "target": "accept-offer",
+      "requireAuth": false,
+      "order": 0,
+      "rateLimitPerMinute": 60
+    },
+    {
+      "method": "POST",
+      "path": "/api/synthetic/route-next",
+      "kind": "Function",
+      "target": "route-next",
+      "requireAuth": false,
+      "order": 0,
+      "rateLimitPerMinute": 60
+    },
+    {
+      "method": "POST",
+      "path": "/api/synthetic/seed",
+      "kind": "Function",
+      "target": "seed-synthetic",
+      "requireAuth": false,
+      "order": 0,
+      "rateLimitPerMinute": 30
+    }
+  ],
+  "files": [],
+  "modules": [],
+  "functions": [
+    {
+      "name": "accept-offer",
+      "runtime": "js",
+      "code": "function response(status, body) { return { status, body }; }\nfunction assignmentKeyFor(offer) { return \"assignment:\" + offer.leadId + \":\" + String(offer.attempt).padStart(6, \"0\"); }\nasync function reconcileAccepted(ctx, offerKey, offer) {\n  const assignmentId = assignmentKeyFor(offer);\n  let assignment = await ctx.data.get(\"assignments\", assignmentId);\n  if (!assignment) {\n    assignment = { id: assignmentId, synthetic: true, leadId: offer.leadId, contractorId: offer.contractorId, offerKey, status: \"accepted\", acceptedAt: offer.acceptedAt || new Date().toISOString(), contactDueAt: new Date(Date.now() + 2 * 60 * 60000).toISOString(), pplCharged: false };\n    await ctx.data.put(\"assignments\", assignmentId, assignment, { ifNotExists: true }).catch(() => {});\n    assignment = await ctx.data.get(\"assignments\", assignmentId) || assignment;\n  }\n  const leadMeta = await ctx.data.getWithMeta(\"leads\", offer.leadId);\n  if (leadMeta && leadMeta.value && leadMeta.value.synthetic === true && leadMeta.value.activeAssignmentId !== assignmentId) {\n    const nextLead = { ...leadMeta.value, status: \"assigned\", activeOfferKey: offerKey, activeAssignmentId: assignmentId, updatedAt: new Date().toISOString() };\n    await ctx.data.put(\"leads\", offer.leadId, nextLead, { ifVersion: leadMeta.version }).catch(() => {});\n  }\n  return assignment;\n}\nasync function handler(ctx) {\n  let body = {};\n  try { body = JSON.parse(ctx.request.body || \"{}\"); } catch { return response(400, { error: \"invalid_json\" }); }\n  const offerKey = String(body.offerKey || \"\");\n  const contractorId = String(body.contractorId || \"\");\n  if (!offerKey || !contractorId) return response(400, { error: \"offerKey_and_contractorId_required\" });\n  let offerMeta = await ctx.data.getWithMeta(\"lead-offers\", offerKey);\n  if (!offerMeta) return response(404, { error: \"offer_not_found\" });\n  let offer = offerMeta.value;\n  if (!offer || offer.synthetic !== true) return response(403, { error: \"synthetic_only\" });\n  if (offer.contractorId !== contractorId) return response(403, { error: \"wrong_contractor\" });\n  if (offer.status === \"accepted\") {\n    const assignment = await reconcileAccepted(ctx, offerKey, offer);\n    return response(200, { ok: true, transitionStatus: \"already_accepted_reconciled\", assignment });\n  }\n  if (offer.status !== \"offered\") return response(409, { error: \"offer_not_open\", status: offer.status });\n  if (new Date(offer.expiresAt).getTime() <= Date.now()) {\n    try { await ctx.data.put(\"lead-offers\", offerKey, { ...offer, status: \"expired\", respondedAt: new Date().toISOString() }, { ifVersion: offerMeta.version }); } catch {}\n    return response(409, { error: \"offer_expired\" });\n  }\n  const leadMeta = await ctx.data.getWithMeta(\"leads\", offer.leadId);\n  if (!leadMeta || !leadMeta.value || leadMeta.value.synthetic !== true) return response(409, { error: \"lead_missing\" });\n  if (leadMeta.value.activeOfferKey !== offerKey) return response(409, { error: \"offer_not_active_for_lead\" });\n  const acceptedAt = new Date().toISOString();\n  let offerWrite;\n  try { offerWrite = await ctx.data.put(\"lead-offers\", offerKey, { ...offer, status: \"accepted\", acceptedAt, respondedAt: acceptedAt }, { ifVersion: offerMeta.version }); }\n  catch (err) {\n    if (err && err.name === \"ConflictError\") {\n      const current = await ctx.data.get(\"lead-offers\", offerKey);\n      if (current && current.status === \"accepted\") {\n        const assignment = await reconcileAccepted(ctx, offerKey, current);\n        return response(200, { ok: true, transitionStatus: \"accepted_after_conflict\", assignment });\n      }\n      return response(409, { error: \"offer_conflict\", retry: true });\n    }\n    throw err;\n  }\n  offer = await ctx.data.get(\"lead-offers\", offerKey);\n  const assignment = await reconcileAccepted(ctx, offerKey, offer);\n  const verifyLead = await ctx.data.get(\"leads\", offer.leadId);\n  if (!verifyLead || verifyLead.activeAssignmentId !== assignment.id) {\n    await ctx.data.put(\"lead-offers\", offerKey, { ...offer, status: \"offered\", rollbackReason: \"lead_accept_reconcile_failed\", updatedAt: new Date().toISOString() }, { ifVersion: offerWrite.version }).catch(() => {});\n    return response(409, { error: \"lead_accept_reconcile_failed\", retry: true });\n  }\n  const eventKey = \"event:\" + offer.leadId + \":\" + String(offer.attempt).padStart(6,\"0\") + \":accepted\";\n  await ctx.data.put(\"routing-events\", eventKey, { synthetic: true, leadId: offer.leadId, offerId: offerKey, contractorId, assignmentId: assignment.id, eventType: \"offer_accepted\", createdAt: new Date().toISOString() }, { ifNotExists: true }).catch(() => {});\n  return response(200, { ok: true, transitionStatus: \"accepted\", assignment });\n}",
+      "sizeBytes": 4694,
+      "sha256": "3d2a426797ba27e301232628175d1a0e6d6c66ebe3dadaf05d8bba004fbf044f",
+      "modules": []
+    },
+    {
+      "name": "health",
+      "runtime": "js",
+      "code": "async function handler(ctx) {\n  return { status: 200, body: { ok: true, service: \"hivequote-core\", backend: \"hedy\", supabase: false, mode: \"synthetic-staging\", now: new Date().toISOString() } };\n}",
+      "sizeBytes": 196,
+      "sha256": "ac9d10c2900a62f694c4df4eada924c2e1859149ef806a91ac980ef5a20fa5d4",
+      "modules": []
+    },
+    {
+      "name": "route-next",
+      "runtime": "js",
+      "code": "function response(status, body) { return { status, body }; }\nfunction offerKeyFor(leadKey, attempt) { return \"offer:\" + leadKey + \":\" + String(attempt).padStart(6, \"0\"); }\nasync function handler(ctx) {\n  let body = {};\n  try { body = JSON.parse(ctx.request.body || \"{}\"); } catch { return response(400, { error: \"invalid_json\" }); }\n  const leadKey = String(body.leadKey || \"\");\n  if (!leadKey) return response(400, { error: \"leadKey_required\" });\n  let meta = await ctx.data.getWithMeta(\"leads\", leadKey);\n  if (!meta) return response(404, { error: \"lead_not_found\" });\n  let lead = meta.value;\n  if (!lead || lead.synthetic !== true) return response(403, { error: \"synthetic_only\" });\n  if (lead.activeOfferKey) {\n    const existing = await ctx.data.get(\"lead-offers\", lead.activeOfferKey);\n    if (existing && existing.status === \"offered\" && new Date(existing.expiresAt).getTime() > Date.now()) {\n      return response(200, { ok: true, routeStatus: \"existing_offer\", offer: existing });\n    }\n  }\n  let nextAttempt = Number(lead.routingAttempt || 0) + 1;\n  if (lead.status === \"routing\" && lead.routingLock && Number(lead.routingAttempt || 0) > 0) {\n    const inFlightAttempt = Number(lead.routingAttempt);\n    const inFlightOfferKey = offerKeyFor(leadKey, inFlightAttempt);\n    const inFlightOffer = await ctx.data.get(\"lead-offers\", inFlightOfferKey);\n    if (inFlightOffer && inFlightOffer.synthetic === true && inFlightOffer.status === \"offered\") {\n      const repaired = { ...lead, status: \"offer_pending\", activeOfferKey: inFlightOfferKey, routingLock: null, updatedAt: new Date().toISOString() };\n      try {\n        await ctx.data.put(\"leads\", leadKey, repaired, { ifVersion: meta.version });\n        return response(200, { ok: true, routeStatus: \"reconciled_offer\", offer: inFlightOffer });\n      } catch (err) {\n        if (err && err.name === \"ConflictError\") return response(409, { error: \"reconcile_conflict\", retry: true });\n        throw err;\n      }\n    }\n    const lockExpiry = new Date(lead.routingLock.expiresAt || 0).getTime();\n    if (lockExpiry > Date.now()) return response(409, { error: \"routing_in_progress\", retry: true });\n    nextAttempt = inFlightAttempt;\n  }\n  const lockUntil = new Date(Date.now() + 30000).toISOString();\n  const locked = { ...lead, status: \"routing\", routingAttempt: nextAttempt, routingLock: { attempt: nextAttempt, expiresAt: lockUntil }, activeOfferKey: null, updatedAt: new Date().toISOString() };\n  let lockWrite;\n  try { lockWrite = await ctx.data.put(\"leads\", leadKey, locked, { ifVersion: meta.version }); }\n  catch (err) {\n    if (err && err.name === \"ConflictError\") return response(409, { error: \"routing_conflict\", retry: true });\n    throw err;\n  }\n  const coverage = await ctx.data.query(\"coverage\", \"bycoverage\", { eq: lead.coverageKey, limit: 100 });\n  const coverageItems = (coverage.items || []).filter(x => x.value && x.value.synthetic === true);\n  const contractorKeys = coverageItems.map(x => x.value.contractorId);\n  const batch = contractorKeys.length ? await ctx.data.batchGet(\"contractors\", contractorKeys) : { items: [] };\n  const offered = new Set(Array.isArray(lead.offeredContractorIds) ? lead.offeredContractorIds : []);\n  const candidates = (batch.items || [])\n    .filter(x => x.found && x.value && x.value.synthetic === true)\n    .map(x => x.value)\n    .filter(c => c.status === \"active\" && c.licenseStatus === \"active\" && [\"available\",\"limited\"].includes(c.capacityStatus))\n    .filter(c => !offered.has(c.id))\n    .filter(c => c.billingModel !== \"ppl\" || Number(c.walletAvailableCents || 0) >= Number(lead.pplPriceCents || 0))\n    .sort((a,b) => Number(a.leadsDeliveredThisMonth || 0) - Number(b.leadsDeliveredThisMonth || 0) || Number(b.closeRatePct || 0) - Number(a.closeRatePct || 0) || String(a.id).localeCompare(String(b.id)));\n  if (!candidates.length) {\n    const failed = { ...locked, status: \"routing_failed\", routingLock: null, activeOfferKey: null, updatedAt: new Date().toISOString() };\n    try { await ctx.data.put(\"leads\", leadKey, failed, { ifVersion: lockWrite.version }); } catch {}\n    const eventKey = \"event:\" + leadKey + \":\" + String(nextAttempt).padStart(6,\"0\") + \":no-match\";\n    await ctx.data.put(\"routing-events\", eventKey, { synthetic: true, leadId: leadKey, eventType: \"routing_no_match\", attempt: nextAttempt, createdAt: new Date().toISOString() }, { ifNotExists: true }).catch(() => {});\n    return response(200, { ok: true, routeStatus: \"no_match\", attempt: nextAttempt });\n  }\n  const contractor = candidates[0];\n  const offerKey = offerKeyFor(leadKey, nextAttempt);\n  const now = new Date();\n  const offer = { id: offerKey, synthetic: true, leadId: leadKey, contractorId: contractor.id, attempt: nextAttempt, status: \"offered\", pplPriceSnapshotCents: Number(lead.pplPriceCents || 0), offeredAt: now.toISOString(), expiresAt: new Date(now.getTime() + 60 * 60000).toISOString() };\n  try { await ctx.data.put(\"lead-offers\", offerKey, offer, { ifNotExists: true }); }\n  catch (err) { if (!(err && err.name === \"ConflictError\")) throw err; }\n  const actualOffer = await ctx.data.get(\"lead-offers\", offerKey);\n  if (!actualOffer || actualOffer.synthetic !== true || actualOffer.status !== \"offered\") {\n    const failed = { ...locked, status: \"routing_failed\", routingLock: null, updatedAt: new Date().toISOString() };\n    await ctx.data.put(\"leads\", leadKey, failed, { ifVersion: lockWrite.version }).catch(() => {});\n    return response(409, { error: \"offer_reconciliation_failed\", retry: true });\n  }\n  const routed = { ...locked, status: \"offer_pending\", routingLock: null, activeOfferKey: offerKey, offeredContractorIds: [...offered, contractor.id], updatedAt: new Date().toISOString() };\n  try { await ctx.data.put(\"leads\", leadKey, routed, { ifVersion: lockWrite.version }); }\n  catch (err) {\n    await ctx.data.put(\"lead-offers\", offerKey, { ...actualOffer, status: \"cancelled\", cancelReason: \"lead_state_conflict\", updatedAt: new Date().toISOString() }).catch(() => {});\n    if (err && err.name === \"ConflictError\") return response(409, { error: \"lead_state_conflict\", retry: true });\n    throw err;\n  }\n  const eventKey = \"event:\" + leadKey + \":\" + String(nextAttempt).padStart(6,\"0\") + \":offer-created\";\n  await ctx.data.put(\"routing-events\", eventKey, { synthetic: true, leadId: leadKey, offerId: offerKey, contractorId: contractor.id, eventType: \"offer_created\", attempt: nextAttempt, createdAt: new Date().toISOString() }, { ifNotExists: true }).catch(() => {});\n  return response(200, { ok: true, routeStatus: \"offered\", offer: actualOffer, contractor: { id: contractor.id, businessName: contractor.businessName } });\n}",
+      "sizeBytes": 6648,
+      "sha256": "6c020e70a75d61782594ba379ae935a91f85d095cb1c5300bbee870f9b472513",
+      "modules": []
+    },
+    {
+      "name": "seed-synthetic",
+      "runtime": "js",
+      "code": "async function handler(ctx) {\n  let body = {};\n  try { body = JSON.parse(ctx.request.body || \"{}\"); } catch { return { status: 400, body: { error: \"invalid_json\" } }; }\n  const fixture = String(body.fixture || \"default\").replace(/[^a-zA-Z0-9_-]/g, \"\").slice(0, 40) || \"default\";\n  const now = new Date().toISOString();\n  const leadKey = \"lead:\" + fixture;\n  const contractorA = \"contractor:\" + fixture + \":a\";\n  const contractorB = \"contractor:\" + fixture + \":b\";\n  const coverageKey = \"roofing|84604\";\n  await ctx.data.batchPut(\"contractors\", [\n    { key: contractorA, value: { id: contractorA, synthetic: true, businessName: \"Synthetic Roofing A\", status: \"active\", licenseStatus: \"active\", capacityStatus: \"available\", billingModel: \"ppl\", walletAvailableCents: 50000, leadsDeliveredThisMonth: 0, closeRatePct: 42, createdAt: now } },\n    { key: contractorB, value: { id: contractorB, synthetic: true, businessName: \"Synthetic Roofing B\", status: \"active\", licenseStatus: \"active\", capacityStatus: \"available\", billingModel: \"ppl\", walletAvailableCents: 50000, leadsDeliveredThisMonth: 1, closeRatePct: 55, createdAt: now } }\n  ]);\n  await ctx.data.batchPut(\"coverage\", [\n    { key: \"coverage:\" + fixture + \":a\", value: { synthetic: true, coverageKey, contractorId: contractorA, isExclusiveZone: false, createdAt: now } },\n    { key: \"coverage:\" + fixture + \":b\", value: { synthetic: true, coverageKey, contractorId: contractorB, isExclusiveZone: false, createdAt: now } }\n  ]);\n  await ctx.data.put(\"leads\", leadKey, {\n    id: leadKey, synthetic: true, firstName: \"Synthetic\", lastName: \"Homeowner\", phone: \"5550000000\",\n    tradeId: \"roofing\", zipCode: \"84604\", coverageKey, status: \"qualified\",\n    pplPriceCents: 12500, routingAttempt: 0, offeredContractorIds: [], activeOfferKey: null,\n    routingLock: null, createdAt: now, updatedAt: now\n  });\n  await ctx.data.put(\"system-config\", \"mode\", { syntheticOnly: true, backend: \"hedy\", updatedAt: now });\n  return { status: 200, body: { ok: true, fixture, leadKey, contractorIds: [contractorA, contractorB] } };\n}",
+      "sizeBytes": 2067,
+      "sha256": "19e97521d4e6ce49076b1744d4c40f4beb93aee6eb38bc2c6127d90d3f41c68a",
+      "modules": []
+    },
+    {
+      "name": "synthetic-e2e",
+      "runtime": "js",
+      "code": "function fail(message, details) {\n  return { status: 500, body: { ok: false, message, details: details || null } };\n}\nasync function handler(ctx) {\n  const fixture = String((ctx.schedule && ctx.schedule.payload && ctx.schedule.payload.fixture) || \"qa1\").replace(/[^a-zA-Z0-9_-]/g, \"\").slice(0, 40) || \"qa1\";\n  const now = new Date().toISOString();\n  const leadKey = \"lead:e2e:\" + fixture;\n  const contractorA = \"contractor:e2e:\" + fixture + \":a\";\n  const contractorB = \"contractor:e2e:\" + fixture + \":b\";\n  const coverageKey = \"roofing|84604\";\n  const offerKey = \"offer:\" + leadKey + \":000001\";\n  const assignmentKey = \"assignment:\" + leadKey + \":000001\";\n  await ctx.data.batchPut(\"contractors\", [\n    { key: contractorA, value: { id: contractorA, synthetic: true, businessName: \"E2E Roofing A\", status: \"active\", licenseStatus: \"active\", capacityStatus: \"available\", billingModel: \"ppl\", walletAvailableCents: 50000, leadsDeliveredThisMonth: 0, closeRatePct: 42, createdAt: now } },\n    { key: contractorB, value: { id: contractorB, synthetic: true, businessName: \"E2E Roofing B\", status: \"active\", licenseStatus: \"active\", capacityStatus: \"available\", billingModel: \"ppl\", walletAvailableCents: 50000, leadsDeliveredThisMonth: 1, closeRatePct: 55, createdAt: now } }\n  ]);\n  await ctx.data.batchPut(\"coverage\", [\n    { key: \"coverage:e2e:\" + fixture + \":a\", value: { synthetic: true, coverageKey, contractorId: contractorA, createdAt: now } },\n    { key: \"coverage:e2e:\" + fixture + \":b\", value: { synthetic: true, coverageKey, contractorId: contractorB, createdAt: now } }\n  ]);\n  await ctx.data.put(\"leads\", leadKey, { id: leadKey, synthetic: true, coverageKey, tradeId: \"roofing\", zipCode: \"84604\", status: \"qualified\", pplPriceCents: 12500, routingAttempt: 0, offeredContractorIds: [], activeOfferKey: null, createdAt: now, updatedAt: now });\n  const leadMeta = await ctx.data.getWithMeta(\"leads\", leadKey);\n  if (!leadMeta || leadMeta.value.status !== \"qualified\") return fail(\"seed_read_failed\");\n  const locked = { ...leadMeta.value, status: \"routing\", routingAttempt: 1, routingLock: { attempt: 1, expiresAt: new Date(Date.now() + 30000).toISOString() }, updatedAt: new Date().toISOString() };\n  const lockWrite = await ctx.data.put(\"leads\", leadKey, locked, { ifVersion: leadMeta.version });\n  const coverage = await ctx.data.query(\"coverage\", \"bycoverage\", { eq: coverageKey, limit: 20 });\n  const contractorKeys = (coverage.items || []).map(x => x.value && x.value.contractorId).filter(Boolean);\n  const batch = await ctx.data.batchGet(\"contractors\", contractorKeys);\n  const candidates = (batch.items || []).filter(x => x.found && x.value && x.value.synthetic === true).map(x => x.value)\n    .filter(c => c.status === \"active\" && c.licenseStatus === \"active\" && c.capacityStatus === \"available\")\n    .filter(c => Number(c.walletAvailableCents || 0) >= 12500)\n    .sort((a,b) => Number(a.leadsDeliveredThisMonth || 0) - Number(b.leadsDeliveredThisMonth || 0) || Number(b.closeRatePct || 0) - Number(a.closeRatePct || 0));\n  if (!candidates.length) return fail(\"no_candidate\");\n  const selected = candidates[0];\n  if (selected.id !== contractorA) return fail(\"ranking_invariant_failed\", { selected: selected.id, expected: contractorA });\n  const offer = { id: offerKey, synthetic: true, leadId: leadKey, contractorId: selected.id, attempt: 1, status: \"offered\", pplPriceSnapshotCents: 12500, offeredAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 3600000).toISOString() };\n  await ctx.data.put(\"lead-offers\", offerKey, offer, { ifNotExists: true });\n  await ctx.data.put(\"leads\", leadKey, { ...locked, status: \"offer_pending\", routingLock: null, activeOfferKey: offerKey, offeredContractorIds: [selected.id], updatedAt: new Date().toISOString() }, { ifVersion: lockWrite.version });\n  const offerMeta = await ctx.data.getWithMeta(\"lead-offers\", offerKey);\n  const leadBeforeAccept = await ctx.data.getWithMeta(\"leads\", leadKey);\n  if (!offerMeta || !leadBeforeAccept || leadBeforeAccept.value.activeOfferKey !== offerKey) return fail(\"offer_state_missing\");\n  const acceptedAt = new Date().toISOString();\n  await ctx.data.put(\"lead-offers\", offerKey, { ...offerMeta.value, status: \"accepted\", acceptedAt, respondedAt: acceptedAt }, { ifVersion: offerMeta.version });\n  const assignment = { id: assignmentKey, synthetic: true, leadId: leadKey, contractorId: selected.id, offerKey, status: \"accepted\", acceptedAt, contactDueAt: new Date(Date.now() + 7200000).toISOString(), pplCharged: false };\n  await ctx.data.put(\"assignments\", assignmentKey, assignment, { ifNotExists: true });\n  await ctx.data.put(\"leads\", leadKey, { ...leadBeforeAccept.value, status: \"assigned\", activeAssignmentId: assignmentKey, updatedAt: new Date().toISOString() }, { ifVersion: leadBeforeAccept.version });\n  await ctx.data.put(\"routing-events\", \"event:\" + leadKey + \":000001:offer-created\", { synthetic: true, leadId: leadKey, offerId: offerKey, contractorId: selected.id, eventType: \"offer_created\", createdAt: acceptedAt }, { ifNotExists: true }).catch(() => {});\n  await ctx.data.put(\"routing-events\", \"event:\" + leadKey + \":000001:accepted\", { synthetic: true, leadId: leadKey, offerId: offerKey, contractorId: selected.id, assignmentId: assignmentKey, eventType: \"offer_accepted\", createdAt: acceptedAt }, { ifNotExists: true }).catch(() => {});\n  const finalLead = await ctx.data.get(\"leads\", leadKey);\n  const finalOffer = await ctx.data.get(\"lead-offers\", offerKey);\n  const finalAssignment = await ctx.data.get(\"assignments\", assignmentKey);\n  if (!finalLead || finalLead.status !== \"assigned\" || finalLead.activeAssignmentId !== assignmentKey) return fail(\"final_lead_invariant_failed\", finalLead);\n  if (!finalOffer || finalOffer.status !== \"accepted\") return fail(\"final_offer_invariant_failed\", finalOffer);\n  if (!finalAssignment || finalAssignment.pplCharged !== false) return fail(\"assignment_money_invariant_failed\", finalAssignment);\n  return { status: 200, body: { ok: true, fixture, leadKey, offerKey, assignmentKey, selectedContractorId: selected.id, invariants: { oneSelectedContractor: true, casLeadLock: true, acceptedAssignment: true, pplCharged: false } } };\n}",
+      "sizeBytes": 6192,
+      "sha256": "f0c2e026076a7653c8ee4e286a02350d3a4224c60c93eda59f330f937efa65a2",
+      "modules": []
+    },
+    {
+      "name": "synthetic-state",
+      "runtime": "js",
+      "code": "async function handler(ctx) {\n  const leadKey = String((ctx.request.query && ctx.request.query.leadKey) || \"\");\n  if (!leadKey) return { status: 400, body: { error: \"leadKey_required\" } };\n  const lead = await ctx.data.get(\"leads\", leadKey);\n  if (!lead) return { status: 404, body: { error: \"lead_not_found\" } };\n  if (lead.synthetic !== true) return { status: 403, body: { error: \"synthetic_only\" } };\n  const offers = await ctx.data.query(\"lead-offers\", \"bylead\", { eq: leadKey, order: \"asc\", limit: 100 });\n  const events = await ctx.data.query(\"routing-events\", \"bylead\", { eq: leadKey, order: \"asc\", limit: 100 });\n  let assignment = null;\n  if (lead.activeAssignmentId) assignment = await ctx.data.get(\"assignments\", lead.activeAssignmentId);\n  return { status: 200, body: { ok: true, lead, offers: (offers.items || []).map(x => x.value), events: (events.items || []).map(x => x.value), assignment } };\n}",
+      "sizeBytes": 911,
+      "sha256": "29b1afef08fcaa48372bb99e40de5a503aec1ffb4ee3b479fabc6419fd1e7afd",
+      "modules": []
+    }
+  ],
+  "schedules": [],
+  "inboundWebhooks": []
+}
